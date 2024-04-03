@@ -16,6 +16,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
 import java.time.*;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -213,46 +214,84 @@ public class HealthRecordService {
         }
     }
 
+
     public HealthRecord mapApiResponseToHealthRecord(Map<String, Object> apiResponse) {
         HealthRecord healthRecord = new HealthRecord();
         healthRecord.setId(UUID.randomUUID());
         healthRecord.setLast_updated(LocalDateTime.now());
 
-
-        List<Map<String, Object>> bloodPressureData = (List<Map<String, Object>>) apiResponse.get("BloodPressure");
-        Map<String, Object> firstEntryBloodPressure = bloodPressureData.get(0);
-        Object bloodPressureValueObj = firstEntryBloodPressure.get("value");
-        String bloodPressureValueStr = (String) bloodPressureValueObj;
-        healthRecord.setBlood_pressure(Integer.parseInt(bloodPressureValueStr));
-        System.out.println(bloodPressureValueStr);
-
+        // Extract and calculate average temperature
         List<Map<String, Object>> temperatureData = (List<Map<String, Object>>) apiResponse.get("temperature");
-        Map<String, Object> firstEntryTemperature = temperatureData.get(0);
-        Object temperatureValueObj = firstEntryTemperature.get("value");
-        String temperatureValueStr = (String) temperatureValueObj;
-        healthRecord.setTemperature(Integer.parseInt(temperatureValueStr));
-        System.out.println(temperatureValueStr);
+        double sumTemperature = 0.0;
+        int countTemperature = 0;
+        for (Map<String, Object> entry : temperatureData) {
+            Object temperatureValueObj = entry.get("value");
+            if (temperatureValueObj instanceof Number) {
+                double temperatureValue = ((Number) temperatureValueObj).doubleValue();
+                sumTemperature += temperatureValue;
+                countTemperature++;
+            }
+        }
+        double averageTemperature = countTemperature > 0 ? sumTemperature / countTemperature : 0.0;
+        healthRecord.setTemperature((int) Math.floor(averageTemperature));
+        System.out.println("Average Temperature: " + averageTemperature);
 
+        // Extract and calculate average blood pressure
+        List<Map<String, Object>> bloodPressureData = (List<Map<String, Object>>) apiResponse.get("BloodPressure");
+        double sumBloodPressure = 0.0;
+        int countBloodPressure = 0;
+        for (Map<String, Object> entry : bloodPressureData) {
+            Object bloodPressureValueObj = entry.get("value");
+            if (bloodPressureValueObj instanceof Number) {
+                double bloodPressureValue = ((Number) bloodPressureValueObj).doubleValue();
+                sumBloodPressure += bloodPressureValue;
+                countBloodPressure++;
+            }
+        }
+        double averageBloodPressure = countBloodPressure > 0 ? sumBloodPressure / countBloodPressure : 0.0;
+        healthRecord.setBlood_pressure((int) Math.floor(averageBloodPressure));
+        System.out.println("Average Blood Pressure: " + averageBloodPressure);
+
+        // Extract and calculate average heart rate
         List<Map<String, Object>> heartRateData = (List<Map<String, Object>>) apiResponse.get("BPM");
-        Map<String, Object> firstEntryHeartRate = heartRateData.get(0);
-        Object heartRateValueObj = firstEntryHeartRate.get("value");
-        String heartRateValueStr = (String) heartRateValueObj;
-        healthRecord.setHeart_rate(Integer.parseInt(heartRateValueStr));
-        System.out.println(heartRateValueStr);
+        double sumHeartRate = 0.0;
+        int countHeartRate = 0;
+        for (Map<String, Object> entry : heartRateData) {
+            Object heartRateValueObj = entry.get("value");
+            if (heartRateValueObj instanceof Number) {
+                double heartRateValue = ((Number) heartRateValueObj).doubleValue();
+                sumHeartRate += heartRateValue;
+                countHeartRate++;
+            }
+        }
+        double averageHeartRate = countHeartRate > 0 ? sumHeartRate / countHeartRate : 0.0;
+        healthRecord.setHeart_rate((int) Math.floor(averageHeartRate));
+        System.out.println("Average Heart Rate: " + averageHeartRate);
 
         return healthRecord;
     }
 
     // Fetch and save data from ThingsBoard every 1 minutes
-    @Scheduled(fixedRate = 60000)
-    public void fetchHealthRecord () {
+    @Scheduled(fixedRate = 3600000) // Fetch data every one hour
+    public void fetchHealthRecord() {
         AuthResponse authResponse = authService.loginWithThingsBoard("tenant@thingsboard.org", "tenant");
         List<Device> devices = deviceRepository.getActiveDevicesWithOwner();
-        System.out.println("Devices: "+devices.size());
-        for(Device device : devices){
-            System.out.println("device: "+device.getId());
+        System.out.println("Devices: " + devices.size());
+
+        // Calculate start and end timestamps for the last hour
+        long endTs = Instant.now().toEpochMilli();
+        long startTs = Instant.now().minus(1, ChronoUnit.HOURS).toEpochMilli();
+
+        for (Device device : devices) {
+            System.out.println("device: " + device.getId());
             Mono<Map> result = webClient.get()
-                    .uri("/api/plugins/telemetry/DEVICE/" +device.getId()+"/values/timeseries")
+                    .uri(uriBuilder ->
+                            uriBuilder.path("/api/plugins/telemetry/DEVICE/{deviceId}/values/timeseries")
+                                    .queryParam("startTs", startTs)
+                                    .queryParam("endTs", endTs)
+                                    .queryParam("entityId", device.getId())
+                                    // Add other parameters as needed
+                                    .build(device.getId()))
                     .header("Authorization", "Bearer " + authResponse.getAccessToken())
                     .retrieve()
                     .bodyToMono(Map.class);
@@ -265,7 +304,6 @@ public class HealthRecordService {
                 healthRecordRepository.save(healthRecord);
             });
         }
-
     }
 
 }
